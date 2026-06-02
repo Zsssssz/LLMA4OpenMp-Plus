@@ -1,15 +1,12 @@
 # LLMA4OpenMP-Plus
 
-Developed  upon [RussellCanfield/wingman-ai](https://github.com/RussellCanfield/wingman-ai) .
+You can get the data set used in the paper at the following links:
+[AutoParBench](https://github.com/llnl/AutoParBench)
 
 ## Settings
 
-You can use the graphical config view inside a workspace.
-<img src="docs/Settings.png" style="zoom:50%;" />
-
-Or you can edit the settings in settings.json
+You can modify the configuration of generator and reviewer in settings.json.
 <img src="docs/Settings_json.png" style="zoom: 33%;" />
-
 
 
 ## Usage
