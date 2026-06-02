@@ -13,4 +13,4 @@ You can modify the configuration of generator and reviewer in settings.json.
 
 Select the loop, then press "Send message"
 
-![](docs/demo.gif)
+<img src="docs/UI.png" style="zoom: 33%;" />
