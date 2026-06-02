@@ -1,4 +1,4 @@
-# LLMA4OpenMP - VScode
+# LLMA4OpenMP-Plus
 
 Developed  upon [RussellCanfield/wingman-ai](https://github.com/RussellCanfield/wingman-ai) .
 
