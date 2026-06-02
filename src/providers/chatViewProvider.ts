@@ -163,20 +163,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		let originalCode = editor.document.getText(selection);
 		
 		if (originalCode === "") {
-			webviewView.webview.postMessage({
-				command: "response",
-				value: "You need to select some code first!\n",
-			});
+			// webviewView.webview.postMessage({
+			// 	command: "response",
+			// 	value: "You need to select some code first!\n",
+			// });
 			eventEmitter._onQueryComplete.fire();
 			webviewView.webview.postMessage({ command: "done", value: null });
 			return;
 		}
 
 		if (tutorial === "false") {
-			webviewView.webview.postMessage({
-				command: "response",
-				value: "Sorry, we can not parallelize this loop.\n",
-			});
+			 webviewView.webview.postMessage({
+			 	command: "response",
+			 	value: "Sorry, we can not parallelize this loop.\n",
+			 });
 			eventEmitter._onQueryComplete.fire();
 			webviewView.webview.postMessage({ command: "done", value: null });
 			return;
@@ -185,10 +185,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		const maxIterations = vscode.workspace.getConfiguration("VscOMP")
 			.get<number>("Reviewer.maxIterations") || 3;
 
-		webviewView.webview.postMessage({
-			command: "response",
-			value: `=== 开始并行化优化 (最大迭代次数: ${maxIterations}) ===\n\n`,
-		});
+		// webviewView.webview.postMessage({
+		// 	command: "response",
+		// 	value: `=== 开始并行化优化 (最大迭代次数: ${maxIterations}) ===\n\n`,
+		// });
 
 		let currentCode = originalCode;
 		let ragContent = tutorial;
@@ -199,17 +199,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 		for (iteration = 1; iteration <= maxIterations; iteration++) {
 			if (abortController.signal.aborted) {
-				webviewView.webview.postMessage({
-					command: "response",
-					value: "\n[已取消]\n",
-				});
+				// webviewView.webview.postMessage({
+				// 	command: "response",
+				// 	value: "\n[已取消]\n",
+				// });
 				break;
 			}
 
-			webviewView.webview.postMessage({
-				command: "response",
-				value: `--- 第 ${iteration} 轮优化 ---\n`,
-			});
+			// webviewView.webview.postMessage({
+			// 	command: "response",
+			// 	value: `--- 第 ${iteration} 轮优化 ---\n`,
+			// });
 
 			// 根据迭代次数使用不同的提示词
 			let prompt: string;
@@ -232,10 +232,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 			if (abortController.signal.aborted) {
 				console.log("⏹️ 用户取消");
-				webviewView.webview.postMessage({
-					command: "response",
-					value: "\n[已取消]\n",
-				});
+				// webviewView.webview.postMessage({
+				// 	command: "response",
+				// 	value: "\n[已取消]\n",
+				// });
 				break;
 			}
 
@@ -248,23 +248,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
 			currentCode = this.extractCodeBlock(rawResponse);
 
-			webviewView.webview.postMessage({
-				command: "response",
-				value: `并行化代码:\n\`\`\`c\n${currentCode}\n\`\`\`\n`,
-			});
+			// webviewView.webview.postMessage({
+			// 	command: "response",
+			// 	value: `并行化代码:\n\`\`\`c\n${currentCode}\n\`\`\`\n`,
+			// });
 
 			if (!this._reviewer) {
-				webviewView.webview.postMessage({
-					command: "response",
-					value: "(评审器未配置，跳过评审)\n",
-				});
+				// webviewView.webview.postMessage({
+				// 	command: "response",
+				// 	value: "(评审器未配置，跳过评审)\n",
+				// });
 				continue;
 			}
 			console.log("🔍 正在评审...");
-			webviewView.webview.postMessage({
-				command: "response",
-				value: "正在评审...\n",
-			});
+			// webviewView.webview.postMessage({
+			// 	command: "response",
+			// 	value: "正在评审...\n",
+			// });
 
 			// 输出评审 LLM 的完整请求
 			console.log("\n═════════════════════════════════════════════════════════════");
@@ -277,10 +277,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			lastReviewResult = await this._reviewer.review(originalCode, currentCode, abortController.signal);
 
 			if (abortController.signal.aborted) {
-				webviewView.webview.postMessage({
-					command: "response",
-					value: "\n[已取消]\n",
-				});
+				// webviewView.webview.postMessage({
+				// 	command: "response",
+				// 	value: "\n[已取消]\n",
+				// });
 				break;
 			}
 
@@ -298,30 +298,30 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			}
 			console.log("═════════════════════════════════════════════════════════════");
 
-			webviewView.webview.postMessage({
-				command: "response",
-				value: `评审结果: 分数=${lastReviewResult.score}/100, 通过=${!lastReviewResult.hasIssues}\n`,
-			});
+			// webviewView.webview.postMessage({
+			// 	command: "response",
+			// 	value: `评审结果: 分数=${lastReviewResult.score}/100, 通过=${!lastReviewResult.hasIssues}\n`,
+			// });
 
-			if (lastReviewResult.summary) {
-				webviewView.webview.postMessage({
-					command: "response",
-					value: `摘要: ${lastReviewResult.summary}\n`,
-				});
-			}
+			// if (lastReviewResult.summary) {
+			// 	webviewView.webview.postMessage({
+			// 		command: "response",
+			// 		value: `摘要: ${lastReviewResult.summary}\n`,
+			// 	});
+			// }
 
-			if (lastReviewResult.issues.length > 0) {
-				webviewView.webview.postMessage({
-					command: "response",
-					value: "问题列表:\n",
-				});
-				lastReviewResult.issues.forEach((issue, idx) => {
-					webviewView.webview.postMessage({
-						command: "response",
-						value: `${idx + 1}. ${issue.description}\n`,
-					});
-				});
-			}
+			// if (lastReviewResult.issues.length > 0) {
+			// 	webviewView.webview.postMessage({
+			// 		command: "response",
+			// 		value: "问题列表:\n",
+			// 	});
+			// 	lastReviewResult.issues.forEach((issue, idx) => {
+			// 		webviewView.webview.postMessage({
+			// 			command: "response",
+			// 			value: `${idx + 1}. ${issue.description}\n`,
+			// 		});
+			// 	});
+			// }
 
 			if (lastReviewResult.score > bestScore) {
 				bestScore = lastReviewResult.score;
@@ -329,10 +329,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			}
 
 			if (!lastReviewResult.hasIssues || lastReviewResult.score >=90) {
-				webviewView.webview.postMessage({
-					command: "response",
-					value: "\n✅ 评审通过！\n",
-				});
+				// webviewView.webview.postMessage({
+				// 	command: "response",
+				// 	value: "\n✅ 评审通过！\n",
+				// });
 				break;
 			}
 
@@ -362,22 +362,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 			ragContent = tutorial + "\n\n" + optimizationInstructions;
 			
 			console.log(`🔄 优化指令已更新:\n${optimizationInstructions}`);
-			webviewView.webview.postMessage({
-				command: "response",
-				value: "\n--- 继续优化 ---\n",
-			});
+			// webviewView.webview.postMessage({
+			// 	command: "response",
+			// 	value: "\n--- 继续优化 ---\n",
+			// });
 		}
 
-		if (iteration > maxIterations) {
-			webviewView.webview.postMessage({
-				command: "response",
-				value: `\n⚠️ 已达到最大迭代次数 (${maxIterations})，返回最后一轮结果\n`,
-			});
-		}
+		// if (iteration > maxIterations) {
+		// 	webviewView.webview.postMessage({
+		// 		command: "response",
+		// 		value: `\n⚠️ 已达到最大迭代次数 (${maxIterations})，返回最后一轮结果\n`,
+		// 	});
+		// }
 
 		webviewView.webview.postMessage({
 			command: "response",
-			value: `\n=== 最终结果 ===\n\n原始代码:\n\`\`\`c\n${originalCode}\n\`\`\`\n\n并行化代码:\n\`\`\`c\n${currentCode}\n\`\`\`\n\n评审分数: ${lastReviewResult?.score || bestScore}/100\n`,
+			value: `Original Code:\n\`\`\`c\n${originalCode}\n\`\`\`\n\nParallelized Code:\n\`\`\`c\n${currentCode}\n\`\`\``,
 		});
 
 		eventEmitter._onQueryComplete.fire();
