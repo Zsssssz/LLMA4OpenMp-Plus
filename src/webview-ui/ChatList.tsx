@@ -59,12 +59,11 @@ function ChatResponseList({
 	}, [ref.current]);
 
 	const chatHistory = useMemo(() => {
-		return messages.map(({ from, message, context }, index) => (
+		return messages.map(({ from, message }, index) => (
 			<ChatEntry
 				key={index}
 				from={from}
 				message={message}
-				context={context}
 			/>
 		));
 	}, [messages]);

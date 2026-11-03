@@ -1,3 +1,5 @@
+import { buildReviewSystem, defaultOpenMPRules } from "./reviewer/prompts";
+
 export const commonChatPrompt = `You are an expert software engineer and technical mentor.
 Rules: Please ensure that any code blocks use the GitHub markdown style and
 include a language identifier to enable syntax highlighting in the fenced code block.
@@ -25,23 +27,7 @@ for (int i = 0; i < N; i++) {
 }
 \`\`\``;
 
-export const commonReviewPrompt = `你是一位资深的 OpenMP 并行计算专家，负责评审并行化代码的质量。
-
-评审标准：
-1. 正确性：检查是否存在数据竞争问题，并行化后结果是否与原代码一致
-2. 效率：评估是否选择了最优的并行化策略，是否有性能瓶颈
-3. 规范性：检查 OpenMP 指令使用是否符合最佳实践
-4. 完整性：验证是否遗漏了必要的 private/reduction 等子句
-
-输出格式要求（必须严格遵守）：
-【评审分数】数字（0-100）
-【问题列表】
-- [严重/警告/提示] [类型]：问题描述
-  建议：具体优化方案
-【优化建议】
-1. ...
-【是否通过】是或否
-【摘要】简要总结评审结果`;
+export const commonReviewPrompt = buildReviewSystem(defaultOpenMPRules);
 
 export const nestedPrompt = ` 
 *****experience: nested loops*****

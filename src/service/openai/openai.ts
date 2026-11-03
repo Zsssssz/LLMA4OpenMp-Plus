@@ -11,12 +11,12 @@ import { eventEmitter } from "../../events/eventEmitter";
 import {
 	commonChatPrompt,
 	commonParallelizePrompt,
-	commonReviewPrompt,
 } from "../common";
 import { OpenAIMessages, OpenAIRequest } from "./types/OpenAIRequest";
 import { OpenAIResponse, OpenAIStreamResponse } from "./types/OpenAIResponse";
 import { OpenAIModel } from "../../types/Models";
-import { ReviewResult } from "../../types/Review";
+import { ReviewResult, ReviewContext } from "../../types/Review";
+import { Reviewer } from "../reviewer";
 
 export class OpenAI implements AIProvider {
 	decoder = new TextDecoder();
@@ -31,7 +31,7 @@ export class OpenAI implements AIProvider {
 		const openaiConfig = config.get<Settings["openai"]>("OpenAI");
 
 		loggingProvider.logInfo(
-			`OpenAI settings loaded: ${JSON.stringify(openaiConfig)}`
+			`OpenAI settings loaded for model: ${openaiConfig?.chatModel ?? "unset"}`
 		);
 
 		if (!openaiConfig) {
@@ -175,7 +175,7 @@ export class OpenAI implements AIProvider {
 				continue;
 			}
 
-			const { content } = chunk.choices[0].delta;
+			const { content } = chunk.choices[0]?.delta ?? {};
 			if (!content) {
 				continue;
 			}
@@ -238,12 +238,17 @@ export class OpenAI implements AIProvider {
 		);
 
 		if (!response?.ok) {
+			const errorBody = await response
+				?.clone()
+				.text()
+				.catch(() => "<no body>");
 			loggingProvider.logError(
-				`OpenAI - Refactor failed with the following status code: ${response?.status}`
+				`OpenAI - Refactor failed with the following status code: ${response?.status}, body: ${errorBody}`
 			);
 			vscode.window.showErrorMessage(
 				`OpenAI - Refactor failed with the following status code: ${response?.status}`
 			);
+			return "";
 		}
 
 		if (!response?.body) {
@@ -251,113 +256,22 @@ export class OpenAI implements AIProvider {
 		}
 
 		const openAiResponse = (await response.json()) as OpenAIResponse;
-		return openAiResponse.choices[0].message.content;
-	}
 
-	public async review(
-		originalCode: string,
-		parallelizedCode: string,
-		signal: AbortSignal
-	): Promise<ReviewResult> {
-		const userPrompt = `
-原始代码：
-\`\`\`c
-${originalCode}
-\`\`\`
-
-并行化代码：
-\`\`\`c
-${parallelizedCode}
-\`\`\`
-
-请进行评审。
-`;
-
-		const reviewPayload: OpenAIRequest = {
-			model: this.settings?.chatModel!,
-			messages: [
-				{
-					role: "system" as unknown as "user" | "assistant",
-					content: commonReviewPrompt,
-				},
-				{
-					role: "user",
-					content: userPrompt,
-				},
-			],
-			temperature: 0.2,
-			top_p: 0.3,
-		};
-
-		loggingProvider.logInfo(
-			`OpenAI - Review submitting request with body: ${JSON.stringify(
-				reviewPayload
-			)}`
-		);
-
-		try {
-			const response = await this.fetchModelResponse(reviewPayload, signal);
-			if (!response?.ok) {
-				loggingProvider.logError(
-					`OpenAI - Review failed with status: ${response?.status}`
-				);
-				return {
-					hasIssues: true,
-					score: 0,
-					issues: [],
-					suggestions: [],
-					summary: "评审请求失败",
-				};
-			}
-
-			const openAiResponse = (await response.json()) as OpenAIResponse;
-			return this.parseReviewResult(openAiResponse.choices[0].message.content);
-		} catch (error) {
-			loggingProvider.logError(`OpenAI review error: ${error}`);
-			return {
-				hasIssues: true,
-				score: 0,
-				issues: [],
-				suggestions: [],
-				summary: "评审服务调用失败",
-			};
+		if (!openAiResponse?.choices?.length) {
+			loggingProvider.logError(
+				`OpenAI - Refactor response contained no choices: ${JSON.stringify(
+					openAiResponse
+				)}`
+			);
+			return "";
 		}
+
+		return openAiResponse.choices[0].message?.content ?? "";
 	}
 
-	private parseReviewResult(content: string): ReviewResult {
-		const scoreMatch = content.match(/【评审分数】(\d+)/);
-		const passedMatch = content.match(/【是否通过】(是|否)/);
-		const summaryMatch = content.match(/【摘要】(.+)/);
-
-		const score = scoreMatch ? parseInt(scoreMatch[1]) : 50;
-		const passed = passedMatch?.[1] === "是";
-		const summary = summaryMatch?.[1] || "未提供摘要";
-
-		const issueMatches = content.match(/- \[(严重|警告|提示)\] \[(.+?)\]：(.+?)(?=\n建议：)/g) || [];
-		const issues = issueMatches.map((match) => {
-			const parts = match.match(/- \[(严重|警告|提示)\] \[(.+?)\]：(.+)/);
-			if (!parts) return null;
-			const severity = parts[1] === "严重" ? "critical" : parts[1] === "警告" ? "warning" : "info";
-			const type = parts[2] === "correctness" || parts[2] === "性能" ? "performance" : 
-				parts[2] === "style" || parts[2] === "规范" ? "style" : "correctness";
-			return {
-				severity,
-				type,
-				description: parts[3],
-				suggestion: "",
-			};
-		}).filter((i): i is ReviewResult["issues"][0] => i !== null);
-
-		const suggestionMatches = content.match(/【优化建议】\n([\s\S]*?)(?=\n【|$)/);
-		const suggestions = suggestionMatches ? 
-			suggestionMatches[1].split("\n").filter(s => s.trim() && !s.startsWith("【")).map(s => s.replace(/^\d+\.\s*/, "").trim()) : [];
-
-		return {
-			hasIssues: !passed || issues.length > 0,
-			score,
-			issues,
-			suggestions,
-			summary,
-		};
+	public async review(originalCode: string, parallelizedCode: string, signal: AbortSignal, context?: ReviewContext): Promise<ReviewResult> {
+		const reviewer = new Reviewer({ apiKey: this.settings?.apiKey ?? "", apiEndpoint: this.settings?.baseUrl ?? "",
+			model: this.settings?.chatModel ?? "" });
+		return reviewer.review(originalCode, parallelizedCode, signal, context);
 	}
 }

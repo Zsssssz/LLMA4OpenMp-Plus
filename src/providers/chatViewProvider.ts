@@ -6,7 +6,10 @@ import { InteractionSettings } from "../types/Settings";
 import { loggingProvider } from "./loggingProvider";
 import { check } from "./parser";
 import { Reviewer } from "../service/reviewer";
-import { ReviewResult } from "../types/Review";
+import { ValidationConfig, ValidationInput } from "../types/Validation";
+import { ValidationService } from "../service/validation/validationService";
+import { OptimizationController } from "../service/optimizationController";
+import * as path from "node:path";
 const Parser = require("web-tree-sitter")
 
 let abortController = new AbortController();
@@ -120,276 +123,88 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 		vscode.window.showTextDocument(newFile);
 	}
 
-	private async handleParallelize({
-		value,
-		webviewView,
-	}: Pick<AppMessage, "value"> & { webviewView: vscode.WebviewView }) {
-		abortController = new AbortController();
-
-		let editor = vscode.window.activeTextEditor;
-        if (!editor) {
-            return undefined;
-        }
-		let { document, selection } = editor;
-		let tutorial: string = "";
-		Parser.init().then(async() => {
-			console.log(vscode.Uri.joinPath(this._context.extensionUri, 'out', `tree-sitter-${document.languageId}.wasm`).fsPath);
-			const language = await Parser.Language.load(vscode.Uri.joinPath(this._context.extensionUri, 'out', `tree-sitter-${document.languageId}.wasm`).fsPath);
-			const parser = new Parser;
-			parser.setLanguage(language);
-			let tree = parser.parse(editor.document.getText(selection));
-			tutorial = check(tree);
-			console.log(tutorial);
-			
-			await this.streamParallelizeResponse(
-				tutorial as string,
-				webviewView
-			);
-		});
-	}
-
-	private async streamParallelizeResponse(
-		tutorial: string,
-		webviewView: vscode.WebviewView
-	) {
-
+	private async handleParallelize({ webviewView }: Pick<AppMessage, "value"> & { webviewView: vscode.WebviewView }) {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor || editor.selection.isEmpty) {
+			webviewView.webview.postMessage({ command: "response", value: "请先选中目标循环。\n" });
+			webviewView.webview.postMessage({ command: "done", value: null });
+			return;
+		}
+		if (!vscode.workspace.isTrusted || editor.document.uri.scheme !== "file") {
+			webviewView.webview.postMessage({ command: "response", value: "工具反馈需要可信工作区中的源文件；请保存文件并在可信项目中运行。\n" });
+			webviewView.webview.postMessage({ command: "done", value: null });
+			return;
+		}
+		abortController.abort();
+		const requestController = new AbortController();
+		abortController = requestController;
+		const document = editor.document, selection = editor.selection;
+		const sourcePath = document.uri.fsPath;
+		const workspaceRoot = vscode.workspace.getWorkspaceFolder(document.uri)?.uri.fsPath ?? path.dirname(sourcePath);
+		const fullSource = document.getText();
+		const input: ValidationInput = {
+			workspaceRoot, sourcePath, fullSource,
+			selectionStart: document.offsetAt(selection.start), selectionEnd: document.offsetAt(selection.end),
+			unsavedFiles: Object.fromEntries(vscode.workspace.textDocuments
+				.filter(doc => doc.isDirty && doc.uri.scheme === "file" && vscode.workspace.getWorkspaceFolder(doc.uri)?.uri.fsPath === workspaceRoot)
+				.map(doc => [doc.uri.fsPath, doc.getText()])),
+		};
 		eventEmitter._onQueryStart.fire();
-
-		let editor = vscode.window.activeTextEditor;
-		if (!editor) {
-			return undefined;
-		}
-		let selection = editor.selection;
-		let originalCode = editor.document.getText(selection);
-		
-		if (originalCode === "") {
-			// webviewView.webview.postMessage({
-			// 	command: "response",
-			// 	value: "You need to select some code first!\n",
-			// });
-			eventEmitter._onQueryComplete.fire();
-			webviewView.webview.postMessage({ command: "done", value: null });
-			return;
-		}
-
-		if (tutorial === "false") {
-			 webviewView.webview.postMessage({
-			 	command: "response",
-			 	value: "Sorry, we can not parallelize this loop.\n",
-			 });
-			eventEmitter._onQueryComplete.fire();
-			webviewView.webview.postMessage({ command: "done", value: null });
-			return;
-		}
-
-		const maxIterations = vscode.workspace.getConfiguration("VscOMP")
-			.get<number>("Reviewer.maxIterations") || 3;
-
-		// webviewView.webview.postMessage({
-		// 	command: "response",
-		// 	value: `=== 开始并行化优化 (最大迭代次数: ${maxIterations}) ===\n\n`,
-		// });
-
-		let currentCode = originalCode;
-		let ragContent = tutorial;
-		let iteration = 0;
-		let lastReviewResult: ReviewResult | null = null;
-		let bestCode = originalCode;
-		let bestScore = 0;
-
-		for (iteration = 1; iteration <= maxIterations; iteration++) {
-			if (abortController.signal.aborted) {
-				// webviewView.webview.postMessage({
-				// 	command: "response",
-				// 	value: "\n[已取消]\n",
-				// });
-				break;
+		let session: ValidationService | undefined;
+		const emit = (value: string) => {
+			if (abortController === requestController) webviewView.webview.postMessage({ command: "response", value });
+		};
+		try {
+			let tutorial = "";
+			try {
+				await Parser.init();
+				const language = await Parser.Language.load(vscode.Uri.joinPath(this._context.extensionUri, "out", `tree-sitter-${document.languageId}.wasm`).fsPath);
+				const parser = new Parser();
+				parser.setLanguage(language);
+				const tree = parser.parse(fullSource.slice(input.selectionStart, input.selectionEnd));
+				try { tutorial = check(tree); } finally { tree.delete(); parser.delete(); }
+			} catch (cause) {
+				loggingProvider.logInfo(`Static analysis unavailable: ${String(cause)}`);
+				tutorial = "静态分析未完成；请根据代码和工具诊断分析，不能假定已证明依赖安全。";
 			}
-
-			// webviewView.webview.postMessage({
-			// 	command: "response",
-			// 	value: `--- 第 ${iteration} 轮优化 ---\n`,
-			// });
-
-			// 根据迭代次数使用不同的提示词
-			let prompt: string;
-			if (iteration === 1) {
-				prompt = "You need to parallelize the following C code using OpenMP:\n\`\`\`\n" + currentCode + "\n\`\`\`\n\n【重要规则】只允许添加 OpenMP 指令，**禁止修改原有代码的任何逻辑**，包括变量名、循环结构、赋值语句等。保持原有代码完全不变，只添加必要的并行化指令。\n\nHere are some parallelizing experiences:\n";
-			} else {
-				prompt = "Please fix the following OpenMP code based on the review feedback:\n\`\`\`\n" + currentCode + "\n\`\`\`\n\n【重要规则】只允许修改或调整 OpenMP 指令部分），**禁止修改原有代码的任何逻辑**，包括变量名、循环结构、赋值语句等。保持原有代码完全不变。\n";
+			if (requestController.signal.aborted) return;
+			if (tutorial === "false") {
+				emit("静态分析拒绝该循环的并行化，保留原始代码。\n");
+				return;
 			}
-			// 输出代码 LLM 的完整请求
-			console.log("\n═════════════════════════════════════════════════════════════");
-			console.log("📝 【代码 LLM 请求】");
-			console.log("═════════════════════════════════════════════════════════════");
-			console.log(`提示词:\n${prompt}`);
-			if (ragContent) {
-				console.log(`优化指令:\n${ragContent}`);
-			}
-			console.log("═════════════════════════════════════════════════════════════");
-
-			let rawResponse = await this._aiProvider.parallelize(prompt, ragContent, abortController.signal);
-
-			if (abortController.signal.aborted) {
-				console.log("⏹️ 用户取消");
-				// webviewView.webview.postMessage({
-				// 	command: "response",
-				// 	value: "\n[已取消]\n",
-				// });
-				break;
-			}
-
-			// 输出代码 LLM 的完整响应
-			console.log("\n═════════════════════════════════════════════════════════════");
-			console.log("📤 【代码 LLM 响应】");
-			console.log("═════════════════════════════════════════════════════════════");
-			console.log(rawResponse);
-			console.log("═════════════════════════════════════════════════════════════");
-
-			currentCode = this.extractCodeBlock(rawResponse);
-
-			// webviewView.webview.postMessage({
-			// 	command: "response",
-			// 	value: `并行化代码:\n\`\`\`c\n${currentCode}\n\`\`\`\n`,
-			// });
-
-			if (!this._reviewer) {
-				// webviewView.webview.postMessage({
-				// 	command: "response",
-				// 	value: "(评审器未配置，跳过评审)\n",
-				// });
-				continue;
-			}
-			console.log("🔍 正在评审...");
-			// webviewView.webview.postMessage({
-			// 	command: "response",
-			// 	value: "正在评审...\n",
-			// });
-
-			// 输出评审 LLM 的完整请求
-			console.log("\n═════════════════════════════════════════════════════════════");
-			console.log("🔍 【评审 LLM 请求】");
-			console.log("═════════════════════════════════════════════════════════════");
-			console.log(`原始代码:\n${originalCode}`);
-			console.log(`并行化代码:\n${currentCode}`);
-			console.log("═════════════════════════════════════════════════════════════");
-
-			lastReviewResult = await this._reviewer.review(originalCode, currentCode, abortController.signal);
-
-			if (abortController.signal.aborted) {
-				// webviewView.webview.postMessage({
-				// 	command: "response",
-				// 	value: "\n[已取消]\n",
-				// });
-				break;
-			}
-
-			console.log("\n═════════════════════════════════════════════════════════════");
-			console.log("📊 【评审 LLM 响应】");
-			console.log("═════════════════════════════════════════════════════════════");
-			console.log("Score: " + lastReviewResult.score + "/100");
-			console.log("Passed: " + !lastReviewResult.hasIssues);
-			console.log("Summary: " + lastReviewResult.summary);
-			if (lastReviewResult.issues.length > 0) {
-				console.log("Issues:");
-				lastReviewResult.issues.forEach(function(issue) {
-					console.log("  - [" + issue.severity + "] " + issue.description);
-				});
-			}
-			console.log("═════════════════════════════════════════════════════════════");
-
-			// webviewView.webview.postMessage({
-			// 	command: "response",
-			// 	value: `评审结果: 分数=${lastReviewResult.score}/100, 通过=${!lastReviewResult.hasIssues}\n`,
-			// });
-
-			// if (lastReviewResult.summary) {
-			// 	webviewView.webview.postMessage({
-			// 		command: "response",
-			// 		value: `摘要: ${lastReviewResult.summary}\n`,
-			// 	});
-			// }
-
-			// if (lastReviewResult.issues.length > 0) {
-			// 	webviewView.webview.postMessage({
-			// 		command: "response",
-			// 		value: "问题列表:\n",
-			// 	});
-			// 	lastReviewResult.issues.forEach((issue, idx) => {
-			// 		webviewView.webview.postMessage({
-			// 			command: "response",
-			// 			value: `${idx + 1}. ${issue.description}\n`,
-			// 		});
-			// 	});
-			// }
-
-			if (lastReviewResult.score > bestScore) {
-				bestScore = lastReviewResult.score;
-				bestCode = currentCode;
-			}
-
-			if (!lastReviewResult.hasIssues || lastReviewResult.score >=90) {
-				// webviewView.webview.postMessage({
-				// 	command: "response",
-				// 	value: "\n✅ 评审通过！\n",
-				// });
-				break;
-			}
-
-			// 构建优化指令，只使用最新的评审反馈
-			let optimizationInstructions = "\n【优化指令】请根据评审反馈修改代码：\n";
-			
-			// 优先使用评审器返回的详细优化建议
-			if (lastReviewResult.suggestions.length > 0) {
-				lastReviewResult.suggestions.forEach((suggestion: string, idx: number) => {
-					optimizationInstructions += `${idx + 1}. ${suggestion}\n`;
-				});
-			} 
-			// 如果没有详细建议，则使用问题描述
-			else if (lastReviewResult.issues.length === 0) {
-				optimizationInstructions += "1. 评审未发现问题，但请确保代码符合 OpenMP 最佳实践\n";
-			} else {
-				lastReviewResult.issues.forEach((issue: any, idx: number) => {
-					optimizationInstructions += `${idx + 1}. ${issue.description}\n`;
-					if (issue.suggestion) {
-						optimizationInstructions += `   建议：${issue.suggestion}\n`;
+			const settings = vscode.workspace.getConfiguration("VscOMP", document.uri);
+			const config = settings.get<ValidationConfig>("Validation") ?? { enabled: true };
+			session = new ValidationService(input, { ...config, enabled: config.enabled !== false });
+			const sourceContext = fullSource.length <= 60000 ? fullSource :
+				"文件较长，以下为选区附近上下文；其余项目源码仍参与工具构建：\n" +
+				fullSource.slice(Math.max(0, input.selectionStart - 20000), Math.min(fullSource.length, input.selectionEnd + 20000));
+			const controller = new OptimizationController(this._aiProvider, session, this._reviewer);
+			const result = await controller.optimize({
+				originalCode: fullSource.slice(input.selectionStart, input.selectionEnd), sourceContext, staticAnalysis: tutorial,
+				maxIterations: settings.get<number>("Reviewer.maxIterations") ?? 3,
+				onProgress: message => emit(message + "\n"),
+				onIteration: async record => {
+					await session!.record(record);
+					for (const item of record.validation.checks) {
+						emit(`[${item.kind}] ${item.status}\n`);
+						for (const diagnostic of item.diagnostics.slice(0, 12)) emit(`  ${diagnostic.message.slice(0, 2000)}\n`);
 					}
-				});
+					if (record.review) emit(`语义诊断：${record.review.summary}\n`);
+				},
+			}, requestController.signal);
+			emit(`\n状态：${result.status}\n${result.message}\n\n保留的代码：\n\`\`\`c\n${result.code}\n\`\`\`\n`);
+			if (result.status !== "validated" && result.candidate)
+				emit(`\n未通过完整验证的候选（未采用）：\n\`\`\`c\n${result.candidate}\n\`\`\`\n`);
+			if (session.reportDirectory) emit(`\n逐轮诊断记录：${session.reportDirectory}\n`);
+		} catch (cause) {
+			emit(`工具反馈流程未完成，原始文件未修改：${String(cause)}\n`);
+		} finally {
+			try { await session?.dispose(); } catch (cause) { loggingProvider.logError(`Validation cleanup: ${String(cause)}`); }
+			if (abortController === requestController) {
+				eventEmitter._onQueryComplete.fire();
+				webviewView.webview.postMessage({ command: "done", value: null });
 			}
-			
-			// 第二轮及以后只使用最新的优化指令，不包含第一轮的代码分析经验
-			// 第一轮已经使用过 tutorial，后续迭代只需要最新的评审反馈
-			ragContent = tutorial + "\n\n" + optimizationInstructions;
-			
-			console.log(`🔄 优化指令已更新:\n${optimizationInstructions}`);
-			// webviewView.webview.postMessage({
-			// 	command: "response",
-			// 	value: "\n--- 继续优化 ---\n",
-			// });
 		}
-
-		// if (iteration > maxIterations) {
-		// 	webviewView.webview.postMessage({
-		// 		command: "response",
-		// 		value: `\n⚠️ 已达到最大迭代次数 (${maxIterations})，返回最后一轮结果\n`,
-		// 	});
-		// }
-
-		webviewView.webview.postMessage({
-			command: "response",
-			value: `Original Code:\n\`\`\`c\n${originalCode}\n\`\`\`\n\nParallelized Code:\n\`\`\`c\n${currentCode}\n\`\`\``,
-		});
-
-		eventEmitter._onQueryComplete.fire();
-		webviewView.webview.postMessage({ command: "done", value: null });
-	}
-
-	private extractCodeBlock(text: string): string {
-		const match = text.match(/```c\s*([\s\S]*?)\s*```/);
-		if (match) {
-			return match[1].trim();
-		}
-		return text.trim();
 	}
 
 	private async handleChatMessage({

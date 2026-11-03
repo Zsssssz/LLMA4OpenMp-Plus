@@ -1,59 +1,34 @@
-out
-dist
-node_modules
-.vscode-test/
-*.vsix
-*.zip
-webview-ui/build
-.vscode/settings.json
-
-# C extensions
-*.so
-
-node-llama-cpp/dist/
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
+# Dependencies and build output
+node_modules/
+out/
 dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+*.vsix
+*.tgz
+*.tar.gz
 
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# Pytest
-.pytest_cache/
-
-# Environments
+# Local configuration and credentials
+.vscode/settings.json
 .env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
+.env.*
+!.env.example
+.codex/
+.agents/
+.workbuddy/
 
-# IDEs
-.idea/
+# Tests, experiments, and generated results
+src/test/
+examples/
+NPB/
+tmp/
+outputs/
+.vscode-test/
+.vscomp-validation/
+data/models/
+data/faiss_index/
+*.log
+*.tsbuildinfo
 
-# OS generated files
+# OS metadata
 .DS_Store
-*.pyc
-*~
+Thumbs.db
+*Zone.Identifier

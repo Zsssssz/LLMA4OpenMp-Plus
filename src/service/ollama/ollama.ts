@@ -14,7 +14,8 @@ import {
 	OllamaChatResponse,
 } from "./types";
 import { commonChatPrompt, commonParallelizePrompt, commonReviewPrompt } from "../common";
-import { ReviewResult } from "../../types/Review";
+import { ReviewResult, ReviewContext } from "../../types/Review";
+import { parseReview, reviewError } from "../reviewer/parseReview";
 
 export class Ollama implements AIProvider {
 	decoder = new TextDecoder();
@@ -332,115 +333,30 @@ ${ragContent}`,
 		if (!response) {
 			return "";
 		}
-		const responseObject = (await response.json()) as OllamaResponse;
-		return responseObject.response;
-	}
-
-	public async review(
-		originalCode: string,
-		parallelizedCode: string,
-		signal: AbortSignal
-	): Promise<ReviewResult> {
-		const prompt = `
-原始代码：
-\`\`\`c
-${originalCode}
-\`\`\`
-
-并行化代码：
-\`\`\`c
-${parallelizedCode}
-\`\`\`
-
-请进行评审。
-`;
-
-		const reviewPayload: OllamaRequest = {
-			model: this.settings?.chatModel!,
-			prompt: prompt,
-			system: commonReviewPrompt,
-			stream: false,
-			options: {
-				num_predict: this.interactionSettings?.chatMaxTokens ?? -1,
-				temperature: 0.2,
-				top_k: 20,
-				top_p: 0.2,
-				repeat_penalty: 1.1,
-				stop: [
-					"<｜end▁of▁sentence｜>",
-					"<｜EOT｜>",
-					"</s>",
-					"<|eot_id|>",
-					"<｜fim▁end｜>",
-				],
-			},
-		};
-
-		loggingProvider.logInfo(
-			`Ollama - Review submitting request with body: ${JSON.stringify(
-				reviewPayload
-			)}`
-		);
-
-		try {
-			const response = await this.fetchModelResponse(reviewPayload, signal);
-			if (!response) {
-				return {
-					hasIssues: true,
-					score: 0,
-					issues: [],
-					suggestions: [],
-					summary: "评审请求失败",
-				};
-			}
-			const responseObject = (await response.json()) as OllamaResponse;
-			return this.parseReviewResult(responseObject.response);
-		} catch (error) {
-			loggingProvider.logError(`Ollama review error: ${error}`);
-			return {
-				hasIssues: true,
-				score: 0,
-				issues: [],
-				suggestions: [],
-				summary: "评审服务调用失败",
-			};
+		if (!response.ok) {
+			const errorBody = await response
+				.clone()
+				.text()
+				.catch(() => "<no body>");
+			loggingProvider.logError(
+				`Ollama - Refactor failed with status: ${response.status}, body: ${errorBody}`
+			);
+			return "";
 		}
+		const responseObject = (await response.json()) as OllamaResponse;
+		return responseObject?.response ?? "";
 	}
 
-	private parseReviewResult(content: string): ReviewResult {
-		const scoreMatch = content.match(/【评审分数】(\d+)/);
-		const passedMatch = content.match(/【是否通过】(是|否)/);
-		const summaryMatch = content.match(/【摘要】(.+)/);
-
-		const score = scoreMatch ? parseInt(scoreMatch[1]) : 50;
-		const passed = passedMatch?.[1] === "是";
-		const summary = summaryMatch?.[1] || "未提供摘要";
-
-		const issueMatches = content.match(/- \[(严重|警告|提示)\] \[(.+?)\]：(.+?)(?=\n建议：)/g) || [];
-		const issues = issueMatches.map((match) => {
-			const parts = match.match(/- \[(严重|警告|提示)\] \[(.+?)\]：(.+)/);
-			if (!parts) return null;
-			const severity = parts[1] === "严重" ? "critical" : parts[1] === "警告" ? "warning" : "info";
-			const type = parts[2] === "correctness" || parts[2] === "性能" ? "performance" : 
-				parts[2] === "style" || parts[2] === "规范" ? "style" : "correctness";
-			return {
-				severity,
-				type,
-				description: parts[3],
-				suggestion: "",
-			};
-		}).filter((i): i is ReviewResult["issues"][0] => i !== null);
-
-		const suggestionMatches = content.match(/【优化建议】\n([\s\S]*?)(?=\n【|$)/);
-		const suggestions = suggestionMatches ? 
-			suggestionMatches[1].split("\n").filter(s => s.trim() && !s.startsWith("【")).map(s => s.replace(/^\d+\.\s*/, "").trim()) : [];
-
-		return {
-			hasIssues: !passed || issues.length > 0,
-			score,
-			issues,
-			suggestions,
-			summary,
-		};
+	public async review(originalCode: string, parallelizedCode: string, signal: AbortSignal, context?: ReviewContext): Promise<ReviewResult> {
+		try {
+			const response = await this.fetchModelResponse({
+				model: this.settings?.chatModel ?? "", system: commonReviewPrompt,
+				prompt: JSON.stringify({ originalCode, candidateCode: parallelizedCode, ...context }),
+				stream: false, options: { temperature: 0.2, num_predict: this.interactionSettings?.chatMaxTokens ?? -1 },
+			}, signal);
+			if (!response?.ok) return reviewError(`评审请求失败：HTTP ${response?.status ?? "unknown"}`);
+			const body = await response.json() as OllamaResponse;
+			return parseReview(body.response ?? "");
+		} catch (cause) { return reviewError(`评审服务异常：${String(cause)}`); }
 	}
 }

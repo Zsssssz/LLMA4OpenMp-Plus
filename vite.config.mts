@@ -1,4 +1,5 @@
-import path, { resolve } from "path";
+import { resolve } from "path";
+import { builtinModules } from "node:module";
 import { defineConfig } from "vite";
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 
@@ -6,17 +7,12 @@ import { viteStaticCopy } from 'vite-plugin-static-copy';
 const config = defineConfig({
 	assetsInclude: ["**/*.ttf"],
 	publicDir: "./src/webview-ui/public",
-	resolve: {
-		alias: {
-			"@node-llama": path.resolve(__dirname, "./node-llama-cpp/dist"),
-		},
-	},
 	build: {
 		lib: {
 			entry: "./src/extension.ts",
 		},
 		rollupOptions: {
-			external: ["vscode"],
+			external: ["vscode", ...builtinModules, ...builtinModules.map(name => `node:${name}`)],
 			input: {
 				extension: resolve(__dirname, "src/extension.ts"),
 				index: resolve(__dirname, "src/webview-ui/index.tsx"),
@@ -35,9 +31,6 @@ const config = defineConfig({
 		},
 		sourcemap: true,
 		outDir: "out",
-	},
-	define: {
-		"process.env": process.env,
 	},
 	plugins: [
 		viteStaticCopy({
